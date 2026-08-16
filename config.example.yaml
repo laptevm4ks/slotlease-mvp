@@ -1,0 +1,22 @@
+version: 1
+
+database:
+  # SLOTLEASE_DSN or --dsn overrides this value. Keep real credentials out of Git.
+  dsn: postgresql://slotlease_agent:slotlease_agent_local_only@127.0.0.1:55432/slotlease
+
+plan:
+  # A stale approval must not remain usable forever.
+  expires_in: 15m
+
+defaults:
+  inactive_ttl: 1h
+  max_retained_wal: 512MiB
+
+# This mapping is an explicit allow-list. Unlisted slots are report-only.
+slots:
+  slotlease_demo:
+    owner: data-platform
+    inactive_ttl: 5m
+    max_retained_wal: 64MiB
+    # No slot can enter a drop plan unless this is explicitly true.
+    allow_drop: true

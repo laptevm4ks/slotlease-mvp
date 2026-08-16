@@ -1,0 +1,75 @@
+name: slotlease-mvp
+
+services:
+  postgres:
+    image: postgres:18-bookworm
+    environment:
+      POSTGRES_USER: slotlease_admin
+      POSTGRES_PASSWORD: slotlease_local_only
+      POSTGRES_DB: slotlease
+      POSTGRES_INITDB_ARGS: --data-checksums
+    command:
+      - postgres
+      - -c
+      - wal_level=logical
+      - -c
+      - max_replication_slots=10
+      - -c
+      - max_wal_senders=10
+      # The lab demonstrates WAL retention without allowing unbounded disk growth.
+      - -c
+      - max_slot_wal_keep_size=128MB
+      # SlotLease owns TTL policy in this MVP; PostgreSQL must not auto-invalidate it.
+      - -c
+      - idle_replication_slot_timeout=0
+      - -c
+      - max_wal_size=128MB
+      - -c
+      - min_wal_size=80MB
+      - -c
+      - checkpoint_timeout=30s
+      - -c
+      - checkpoint_completion_target=0.5
+      - -c
+      - log_checkpoints=on
+    ports:
+      - "${POSTGRES_PORT:-55432}:5432"
+    volumes:
+      # PostgreSQL 18+ expects the persistent volume at this parent directory.
+      - postgres_data:/var/lib/postgresql
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
+      - ./infra/postgres/diagnostics:/opt/slotlease/sql:ro
+      - ./infra/postgres/workload:/opt/slotlease/workload:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 5s
+    stop_grace_period: 30s
+
+  # Opt-in consumer. Start it only when you want the slot to advance:
+  # docker compose --profile consumer up -d consumer
+  consumer:
+    image: postgres:18-bookworm
+    profiles: [consumer]
+    environment:
+      PGPASSWORD: slotlease_agent_local_only
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      - pg_recvlogical
+      - --dbname=host=postgres port=5432 dbname=slotlease user=slotlease_agent application_name=slotlease-demo-consumer
+      - --slot=slotlease_demo
+      - --start
+      - --file=/dev/null
+      # /dev/null is deliberately not fsynced; feedback still advances the slot.
+      - --fsync-interval=0
+      - --status-interval=1
+      - --option=proto_version=1
+      - --option=publication_names=slotlease_publication
+    stop_grace_period: 10s
+
+volumes:
+  postgres_data:
